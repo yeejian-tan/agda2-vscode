@@ -93,12 +93,15 @@ function stripComments(lines: string[]): string[] {
 }
 
 function normalizeName(raw: string): string | null {
-  const text = raw.trim();
+  let text = raw.trim();
   if (!text) return null;
-  if (text.startsWith("(") && text.endsWith(")")) {
+
+  while (text.startsWith("(") && text.endsWith(")")) {
     const inner = text.slice(1, -1).trim();
-    return inner || null;
+    if (!inner) return null;
+    text = inner;
   }
+
   const token = text.split(/\s+/)[0];
   return token || null;
 }
@@ -243,8 +246,8 @@ export function parseAgdaSymbols(text: string): ParsedAgdaSymbol[] {
   }
 
   const all = [...declarations, ...functionDecls.values()];
-  all.sort((a, b) => a.line - b.line || a.name.localeCompare(b.name));
-  return all;
+  const sorted = [...all].sort((a, b) => a.line - b.line || a.name.localeCompare(b.name));
+  return sorted;
 }
 
 export class AgdaOutlineProvider implements vscode.DocumentSymbolProvider {
