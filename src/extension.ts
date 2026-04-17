@@ -37,6 +37,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.languages.registerDocumentHighlightProvider({ language: "agda" }, highlighting),
     vscode.languages.registerRenameProvider({ language: "agda" }, highlighting),
+    vscode.languages.registerHoverProvider({ language: "agda" }, highlighting),
     vscode.languages.registerDocumentSymbolProvider(
       { language: "agda" },
       new AgdaOutlineProvider(),

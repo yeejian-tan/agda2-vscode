@@ -31,6 +31,7 @@ export interface StoredEntry {
   range: vscode.Range;
   atoms: string[];
   definitionSite: DefinitionSite | null;
+  note: string;
 }
 
 // --- Semantic token constants ---
@@ -343,6 +344,7 @@ export class HighlightingManager
   implements
     vscode.DocumentSemanticTokensProvider,
     vscode.DocumentHighlightProvider,
+    vscode.HoverProvider,
     vscode.RenameProvider,
     vscode.Disposable
 {
@@ -404,6 +406,7 @@ export class HighlightingManager
         range,
         atoms: entry.atoms,
         definitionSite: entry.definitionSite,
+        note: entry.note,
       });
     }
 
@@ -471,6 +474,33 @@ export class HighlightingManager
     for (const entry of entries) {
       if (entry.definitionSite && rangeContains(entry.range, position)) {
         return entry.definitionSite;
+      }
+    }
+    return undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hover (type information)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Show type information on hover using the `note` field that Agda attaches to
+   * each highlighting token.  Returns a fenced `agda` code block so VS Code
+   * renders it with Agda syntax highlighting.
+   *
+   * Inspired by vscode-haskell's hover middleware which surfaces type
+   * signatures from HLS; here we surface the equivalent data that Agda embeds
+   * directly in its highlighting payload.
+   */
+  provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
+    const entries = this.entriesByUri.get(document.uri.toString());
+    if (!entries) return undefined;
+    for (const entry of entries) {
+      if (entry.note && rangeContains(entry.range, position)) {
+        return new vscode.Hover(
+          new vscode.MarkdownString("```agda\n" + entry.note + "\n```"),
+          entry.range,
+        );
       }
     }
     return undefined;

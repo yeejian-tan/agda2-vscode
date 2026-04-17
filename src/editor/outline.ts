@@ -1,6 +1,13 @@
 import * as vscode from "vscode";
 
-export type ParsedAgdaSymbolKind = "module" | "data" | "record" | "postulate" | "definition";
+export type ParsedAgdaSymbolKind =
+  | "module"
+  | "data"
+  | "record"
+  | "postulate"
+  | "definition"
+  | "constructor"
+  | "field";
 
 export interface ParsedAgdaSymbol {
   name: string;
@@ -128,6 +135,10 @@ function symbolKind(kind: ParsedAgdaSymbolKind): vscode.SymbolKind {
       return vscode.SymbolKind.Constant;
     case "definition":
       return vscode.SymbolKind.Function;
+    case "constructor":
+      return vscode.SymbolKind.Constructor;
+    case "field":
+      return vscode.SymbolKind.Field;
   }
 }
 
@@ -167,6 +178,8 @@ export function parseAgdaSymbols(text: string): ParsedAgdaSymbol[] {
   const functionDecls = new Map<string, ParsedAgdaSymbol>();
   let blockSignatureIndent: number | null = null;
   let blockSignatureKind: ParsedAgdaSymbolKind | null = null;
+  let dataRecordBlock: { indent: number; kind: "data" | "record" } | null = null;
+  let fieldBlockIndent: number | null = null;
 
   for (let line = 0; line < cleanLines.length; line++) {
     const cleanLine = cleanLines[line];
@@ -180,11 +193,63 @@ export function parseAgdaSymbols(text: string): ParsedAgdaSymbol[] {
       blockSignatureKind = null;
     }
 
+    if (dataRecordBlock !== null && indent <= dataRecordBlock.indent) {
+      dataRecordBlock = null;
+      fieldBlockIndent = null;
+    }
+
+    if (fieldBlockIndent !== null && indent <= fieldBlockIndent) {
+      fieldBlockIndent = null;
+    }
+
     if (blockSignatureIndent !== null && blockSignatureKind !== null) {
       const postulateName = nameBefore(trimmed, ":");
       if (postulateName && isEligibleDefinitionName(postulateName)) {
         declarations.push({ name: postulateName, kind: blockSignatureKind, line });
       }
+      continue;
+    }
+
+    if (dataRecordBlock !== null) {
+      // "constructor Name" inside a record declaration
+      if (/^constructor\s+\S/.test(trimmed)) {
+        const rawName = trimmed.slice("constructor".length).trim().split(/\s+/)[0];
+        if (rawName) declarations.push({ name: rawName, kind: "constructor", line });
+        continue;
+      }
+
+      // "field" keyword — starts a field block (also handles inline "field name : type")
+      if (trimmed === "field" || trimmed.startsWith("field ") || trimmed.startsWith("field\t")) {
+        fieldBlockIndent = indent;
+        const rest = trimmed.slice("field".length).trim();
+        if (rest) {
+          const fieldName = nameBefore(rest, ":");
+          if (fieldName && isEligibleDefinitionName(fieldName)) {
+            declarations.push({ name: fieldName, kind: "field", line });
+          }
+        }
+        continue;
+      }
+
+      // Inside an active field block: "name : type" entries are fields
+      if (fieldBlockIndent !== null && indent > fieldBlockIndent) {
+        const fieldName = nameBefore(trimmed, ":");
+        if (fieldName && isEligibleDefinitionName(fieldName)) {
+          declarations.push({ name: fieldName, kind: "field", line });
+        }
+        continue;
+      }
+
+      // Inside a data block: "name : type" signatures are constructors
+      if (dataRecordBlock.kind === "data") {
+        const ctorName = nameBefore(trimmed, ":");
+        if (ctorName && isEligibleDefinitionName(ctorName)) {
+          declarations.push({ name: ctorName, kind: "constructor", line });
+        }
+        continue;
+      }
+
+      // Inside a record block with no active field block: skip (local definitions etc.)
       continue;
     }
 
@@ -197,17 +262,20 @@ export function parseAgdaSymbols(text: string): ParsedAgdaSymbol[] {
     const dataMatch = trimmed.match(/^(?:inductive\s+|coinductive\s+)?data\s+([^\s({:]+)/);
     if (dataMatch) {
       declarations.push({ name: dataMatch[1], kind: "data", line });
+      dataRecordBlock = { indent, kind: "data" };
       continue;
     }
     const codataMatch = trimmed.match(/^codata\s+([^\s({:]+)/);
     if (codataMatch) {
       declarations.push({ name: codataMatch[1], kind: "data", line });
+      dataRecordBlock = { indent, kind: "data" };
       continue;
     }
 
     const recordMatch = trimmed.match(/^record\s+([^\s({:]+)/);
     if (recordMatch) {
       declarations.push({ name: recordMatch[1], kind: "record", line });
+      dataRecordBlock = { indent, kind: "record" };
       continue;
     }
 
@@ -257,19 +325,32 @@ export class AgdaOutlineProvider implements vscode.DocumentSymbolProvider {
     const parsed = parseAgdaSymbols(document.getText());
     const topLevelSymbols: vscode.DocumentSymbol[] = [];
     let currentModule: vscode.DocumentSymbol | null = null;
-    for (const symbol of parsed) {
-      if (symbol.kind === "module") {
-        const moduleSymbol = toDocumentSymbol(document, symbol);
-        topLevelSymbols.push(moduleSymbol);
-        currentModule = moduleSymbol;
-        continue;
-      }
+    let currentParent: vscode.DocumentSymbol | null = null;
 
+    const addToModuleOrTop = (sym: vscode.DocumentSymbol): void => {
+      (currentModule?.children ?? topLevelSymbols).push(sym);
+    };
+
+    for (const symbol of parsed) {
       const docSymbol = toDocumentSymbol(document, symbol);
-      if (currentModule) {
-        currentModule.children.push(docSymbol);
-      } else {
+
+      if (symbol.kind === "module") {
+        currentParent = null;
         topLevelSymbols.push(docSymbol);
+        currentModule = docSymbol;
+      } else if (symbol.kind === "data" || symbol.kind === "record") {
+        currentParent = docSymbol;
+        addToModuleOrTop(docSymbol);
+      } else if (symbol.kind === "constructor" || symbol.kind === "field") {
+        if (currentParent) {
+          currentParent.children.push(docSymbol);
+        } else {
+          addToModuleOrTop(docSymbol);
+        }
+      } else {
+        // definition, postulate — exit any active data/record nesting
+        currentParent = null;
+        addToModuleOrTop(docSymbol);
       }
     }
     return topLevelSymbols;
