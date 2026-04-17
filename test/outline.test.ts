@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseAgdaSymbols } from "../src/editor/outline.js";
+import { AgdaOutlineProvider, parseAgdaSymbols } from "../src/editor/outline.js";
 
 describe("parseAgdaSymbols", () => {
   it("parses module, data/record, signatures and definitions", () => {
@@ -70,5 +70,26 @@ f = Set
     const f = symbols.find((s) => s.name === "f");
 
     expect(f?.line).toBe(4);
+  });
+
+  it("groups declarations under the nearest module", () => {
+    const text = `
+module A where
+a : Set
+
+module B where
+b : Set
+`.trim();
+
+    const lines = text.split("\n");
+    const provider = new AgdaOutlineProvider();
+    const symbols = provider.provideDocumentSymbols({
+      getText: () => text,
+      lineAt: (line: number) => ({ text: lines[line] }),
+    } as any);
+
+    expect(symbols?.map((s: any) => s.name)).toEqual(["A", "B"]);
+    expect(symbols?.[0].children.map((s: any) => s.name)).toEqual(["a"]);
+    expect(symbols?.[1].children.map((s: any) => s.name)).toEqual(["b"]);
   });
 });

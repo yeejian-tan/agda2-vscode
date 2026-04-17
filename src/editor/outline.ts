@@ -163,7 +163,7 @@ export function parseAgdaSymbols(text: string): ParsedAgdaSymbol[] {
   const declarations: ParsedAgdaSymbol[] = [];
   const functionDecls = new Map<string, ParsedAgdaSymbol>();
   let blockSignatureIndent: number | null = null;
-  let blockSignatureKind: Extract<ParsedAgdaSymbolKind, "postulate"> | null = null;
+  let blockSignatureKind: ParsedAgdaSymbolKind | null = null;
 
   for (let line = 0; line < cleanLines.length; line++) {
     const cleanLine = cleanLines[line];
@@ -252,35 +252,23 @@ export class AgdaOutlineProvider implements vscode.DocumentSymbolProvider {
     document: vscode.TextDocument,
   ): vscode.ProviderResult<vscode.DocumentSymbol[]> {
     const parsed = parseAgdaSymbols(document.getText());
-    const moduleSymbols: Array<{ line: number; symbol: vscode.DocumentSymbol }> = [];
-    const topLevelSymbols: Array<{ line: number; symbol: vscode.DocumentSymbol }> = [];
-
+    const topLevelSymbols: vscode.DocumentSymbol[] = [];
+    let currentModule: vscode.DocumentSymbol | null = null;
     for (const symbol of parsed) {
       if (symbol.kind === "module") {
-        moduleSymbols.push({ line: symbol.line, symbol: toDocumentSymbol(document, symbol) });
+        const moduleSymbol = toDocumentSymbol(document, symbol);
+        topLevelSymbols.push(moduleSymbol);
+        currentModule = moduleSymbol;
+        continue;
       }
-    }
 
-    for (const symbol of parsed) {
-      if (symbol.kind === "module") continue;
       const docSymbol = toDocumentSymbol(document, symbol);
-      let parentModule: vscode.DocumentSymbol | null = null;
-      for (const moduleSymbol of moduleSymbols) {
-        if (moduleSymbol.line < symbol.line) {
-          parentModule = moduleSymbol.symbol;
-        } else {
-          break;
-        }
-      }
-      if (parentModule) {
-        parentModule.children.push(docSymbol);
+      if (currentModule) {
+        currentModule.children.push(docSymbol);
       } else {
-        topLevelSymbols.push({ line: symbol.line, symbol: docSymbol });
+        topLevelSymbols.push(docSymbol);
       }
     }
-
-    const allTopLevel = [...moduleSymbols, ...topLevelSymbols];
-    allTopLevel.sort((a, b) => a.line - b.line);
-    return allTopLevel.map((entry) => entry.symbol);
+    return topLevelSymbols;
   }
 }
