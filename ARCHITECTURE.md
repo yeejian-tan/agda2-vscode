@@ -106,13 +106,17 @@ Each highlighting entry has a `[from, to]` range (1-based absolute character off
 
 #### Unified HighlightingManager
 
-`HighlightingManager` (`src/core/highlighting.ts`) is the single source of truth for all highlighting state. It stores `StoredEntry` objects per file URI -- each with a `Range`, atoms, and optional `definitionSite` -- and derives two outputs:
+`HighlightingManager` (`src/core/highlighting.ts`) is the single source of truth for all highlighting state. It stores `StoredEntry` objects per file URI -- each with a `Range`, atoms, optional `definitionSite`, and a `note` string -- and derives several outputs:
 
 1. **Semantic tokens (foreground colors)** -- `HighlightingManager` implements `DocumentSemanticTokensProvider`. VS Code pulls tokens on demand; the manager maps Agda atoms to standard semantic token types so **all foreground text colors come from the user's theme**.
 
 2. **Decorations (backgrounds, underlines, font styles)** -- pushed to VS Code via `setDecorations`. These cover visual properties that semantic tokens cannot express, using `ThemeColor` references to custom color IDs defined in `contributes.colors`.
 
-This unified design means each highlighting entry is stored once and adjusted once when the document is edited, rather than maintaining two parallel data structures.
+3. **Hover type information** -- `HighlightingManager` implements `HoverProvider`. When the cursor hovers over a token, the provider looks up the entry at that position and, if its `note` field is non-empty, returns the note as a fenced `agda` code block. Agda populates `note` with the type signature of the token (e.g. `"f : ℕ → ℕ"`), so this surfaces type information on hover without any extra round-trip to the Agda process. This mirrors the pattern used by vscode-haskell, which surfaces HLS type signatures via its hover middleware.
+
+4. **Go-to-definition** -- definition sites are stored in each entry's `definitionSite` field, looked up by position in a registered `DefinitionProvider`.
+
+This unified design means each highlighting entry is stored once and adjusted once when the document is edited, rather than maintaining several parallel data structures.
 
 #### Edit adjustment
 
@@ -336,6 +340,9 @@ The parser operates on the raw text of the file using a single linear pass:
    | `module <name>`                                                                       | `module`                                       |
    | `data <name>` / `codata <name>` / `inductive data <name>` / `coinductive data <name>` | `data` (→ `SymbolKind.Enum`)                   |
    | `record <name>`                                                                       | `record` (→ `SymbolKind.Struct`)               |
+   | `constructor <name>` (inside a record block)                                          | `constructor` (→ `SymbolKind.Constructor`)     |
+   | `field <name> :` / indented lines in a `field` block                                  | `field` (→ `SymbolKind.Field`)                 |
+   | `<name> :` inside a `data` block                                                      | `constructor` (→ `SymbolKind.Constructor`)     |
    | `postulate` block                                                                     | `postulate` (→ `SymbolKind.Constant`)          |
    | `primitive` block                                                                     | `postulate` (→ `SymbolKind.Constant`)          |
    | `<name> :` (type signature)                                                           | `definition` (→ `SymbolKind.Function`)         |
@@ -343,15 +350,42 @@ The parser operates on the raw text of the file using a single linear pass:
 
 3. **Block signature tracking** -- `postulate`/`primitive` start a block: subsequent indented `<name> :` lines are consumed as members of that block until indentation returns to the block's level.
 
-4. **Deduplication** -- function signatures and clause definitions are kept in a `Map` keyed by name. Signatures record the first occurrence; equation clauses overwrite with the last occurrence (so the symbol points to the final defining equation rather than the type signature, which aids navigation to the implementation).
+4. **Data/record block tracking** -- when a `data` or `record` declaration is matched, the parser enters a `dataRecordBlock` at the declaration's indentation level. Any line more indented than that level is considered inside the block:
+   - Inside a `data` block: `<name> : …` lines are emitted as `constructor`.
+   - Inside a `record` block: `constructor <name>` lines are emitted as `constructor`; a `field` keyword opens a `fieldBlockIndent` sub-block where subsequent indented `<name> : …` lines are emitted as `field`. An inline `field <name> : …` is also accepted.
+   - The block ends when indentation returns to or below the opening declaration's level.
 
-5. **Reserved word filtering** -- `RESERVED_HEAD_TOKENS` lists all Agda keywords that can legally begin a line but are not declaration names (`open`, `import`, `where`, `with`, `let`, `infix`, `rewrite`, etc.), preventing false positives.
+5. **Deduplication** -- function signatures and clause definitions are kept in a `Map` keyed by name. Signatures record the first occurrence; equation clauses overwrite with the last occurrence (so the symbol points to the final defining equation rather than the type signature, which aids navigation to the implementation).
+
+6. **Reserved word filtering** -- `RESERVED_HEAD_TOKENS` lists all Agda keywords that can legally begin a line but are not declaration names (`open`, `import`, `where`, `with`, `let`, `infix`, `rewrite`, etc.), preventing false positives.
 
 ### DocumentSymbolProvider (`AgdaOutlineProvider`)
 
-`AgdaOutlineProvider.provideDocumentSymbols` converts `ParsedAgdaSymbol[]` into `vscode.DocumentSymbol[]`:
+`AgdaOutlineProvider.provideDocumentSymbols` converts `ParsedAgdaSymbol[]` into `vscode.DocumentSymbol[]` with two levels of nesting:
 
-- Module symbols are pushed as top-level entries and become the **current parent**.
-- Every subsequent non-module symbol is added as a child of the nearest preceding module.
-- When a new `module` declaration is encountered, it becomes the new parent, correctly scoping sibling modules to each other.
+**Module nesting** (`currentModule`):
+
+- Module symbols are pushed as top-level entries and become the current module.
+- Non-module symbols that aren't constructors/fields are added as children of the nearest preceding module.
+- When a new `module` declaration is encountered, it becomes the new current module.
 - Symbols before any module declaration appear at the top level.
+
+**Data/record nesting** (`currentParent`):
+
+- `data` and `record` symbols become the current parent (in addition to being added to the module or top level).
+- `constructor` and `field` symbols are added as children of `currentParent` rather than directly to the module.
+- When a `definition` or `postulate` symbol is encountered, `currentParent` is reset to `null` so subsequent definitions are siblings of the data/record, not children.
+- A new `data` or `record` replaces `currentParent`, so each type owns only its own members.
+
+Example structure:
+
+```
+module M             ← top level, currentModule = M
+  data Nat           ← M.children, currentParent = Nat
+    zero             ← Nat.children (constructor)
+    suc              ← Nat.children (constructor)
+  record Pair        ← M.children, currentParent = Pair
+    _,_              ← Pair.children (constructor)
+    fst              ← Pair.children (field)
+  f                  ← M.children, currentParent = null (definition)
+```
