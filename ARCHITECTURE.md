@@ -61,6 +61,7 @@ src/
 │   ├── commands.ts     # Command handlers (load, give, refine, etc.)
 │   ├── infoPanel.ts    # Agda Info Panel (WebviewPanel for goals, context, errors)
 │   ├── keySequence.ts  # Leader M key sequence state machine
+│   ├── outline.ts      # Document symbol provider (Outline view)
 │   └── unicodeInputBox.ts # InputBox with abbreviation support (used for goal prompts)
 ├── unicode/            # Unicode input (backslash abbreviations)
 │   ├── engine/         # Lean 4 abbreviation engine (Apache-2.0, mostly unmodified)
@@ -310,10 +311,47 @@ The line comment rule uses a negative lookbehind to avoid matching `--` inside i
 
 ## Build and test
 
-Begin by running `npm install`.
+Begin by running `npm ci`.
 
 The extension is bundled with **esbuild** (`esbuild.js`): `src/extension.ts` → `dist/extension.js` as CommonJS (required by VS Code), with `vscode` as an external. `--watch` mode is available for development.
 
-Tests use **vitest** (`vitest.config.mts`) with a mock VS Code API (`test/__mocks__/vscode.ts`). Run with `npx vitest run` (308 tests across 15 files). Tests cover offsets, positions, edit adjustment, goals, highlighting, cursor positioning, info panel rendering, abbreviation engine, InputBox abbreviation support, version comparison, and location parsing.
+Tests use **vitest** (`vitest.config.mts`) with a mock VS Code API (`test/__mocks__/vscode.ts`). Run with `npm run test`. Tests cover offsets, positions, edit adjustment, goals, highlighting, cursor positioning, info panel rendering, abbreviation engine, InputBox abbreviation support, version comparison, location parsing, and outline parsing.
 
 `scripts/generate-abbreviations.py` regenerates `src/unicode/abbreviations.json` from Agda's Emacs input method by driving Emacs in batch mode to dump the `agda-input` translation table.
+
+## Outline (Document Symbol Provider)
+
+`src/editor/outline.ts` implements `vscode.DocumentSymbolProvider` for Agda, populating the VS Code **Outline** panel and breadcrumbs without requiring a running Agda process.
+
+### Parser (`parseAgdaSymbols`)
+
+The parser operates on the raw text of the file using a single linear pass:
+
+1. **Comment stripping** (`stripComments`) -- removes line comments (`--`) and nested block comments (`{- ... -}`) before matching. Nested depth is tracked so `{- {- ... -} -}` works correctly.
+
+2. **Line matching** -- each comment-stripped line is classified by its first non-whitespace token:
+
+   | Pattern                                                                               | Kind emitted                                   |
+   | ------------------------------------------------------------------------------------- | ---------------------------------------------- |
+   | `module <name>`                                                                       | `module`                                       |
+   | `data <name>` / `codata <name>` / `inductive data <name>` / `coinductive data <name>` | `data` (→ `SymbolKind.Enum`)                   |
+   | `record <name>`                                                                       | `record` (→ `SymbolKind.Struct`)               |
+   | `postulate` block                                                                     | `postulate` (→ `SymbolKind.Constant`)          |
+   | `primitive` block                                                                     | `postulate` (→ `SymbolKind.Constant`)          |
+   | `<name> :` (type signature)                                                           | `definition` (→ `SymbolKind.Function`)         |
+   | `<name> =` (equation clause)                                                          | `definition`, updating line to the last clause |
+
+3. **Block signature tracking** -- `postulate`/`primitive` start a block: subsequent indented `<name> :` lines are consumed as members of that block until indentation returns to the block's level.
+
+4. **Deduplication** -- function signatures and clause definitions are kept in a `Map` keyed by name. Signatures record the first occurrence; equation clauses overwrite with the last occurrence (so the symbol points to the final defining equation rather than the type signature, which aids navigation to the implementation).
+
+5. **Reserved word filtering** -- `RESERVED_HEAD_TOKENS` lists all Agda keywords that can legally begin a line but are not declaration names (`open`, `import`, `where`, `with`, `let`, `infix`, `rewrite`, etc.), preventing false positives.
+
+### DocumentSymbolProvider (`AgdaOutlineProvider`)
+
+`AgdaOutlineProvider.provideDocumentSymbols` converts `ParsedAgdaSymbol[]` into `vscode.DocumentSymbol[]`:
+
+- Module symbols are pushed as top-level entries and become the **current parent**.
+- Every subsequent non-module symbol is added as a child of the nearest preceding module.
+- When a new `module` declaration is encountered, it becomes the new parent, correctly scoping sibling modules to each other.
+- Symbols before any module declaration appear at the top level.

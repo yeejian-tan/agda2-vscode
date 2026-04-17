@@ -12,6 +12,7 @@ This extension can download recent versions of Agda for all major platforms, so 
 - **Unicode input**: type `\` followed by an abbreviation to insert Unicode characters
 - **Semantic highlighting**: foreground colors from your theme via semantic tokens; background decorations for unsolved metas, termination problems, coverage issues, etc.
 - **Go-to-definition**: Ctrl+Click or F12 to jump to the definition site of any highlighted name
+- **Outline view**: the VS Code Outline panel (View → Outline) and breadcrumbs show modules, datatypes, records, postulates, and function definitions parsed directly from the source, with declarations nested under their enclosing module
 - **Info panel**: persistent side panel showing goal types, context, errors, and other Agda output
 - **VSCodeVim integration**: interacts correctly with VSCodeVim, e.g., accounts for VSCodeVim's bespoke undo/redo mechanism when adjusting goal spans
 
@@ -185,6 +186,69 @@ Hover over any Unicode character in an Agda file to see which abbreviations prod
 This extension is not a fork of the VSCode extension for Agda by banacorn. Its implementation is spiritually closer to Emacs `agda2-mode`. At the time of writing, `banacorn/agda2-mode-vscode` has bugs in a number of cases where we do not, e.g., certain well-typed files fail to highlight and the case split command sometimes inserts ill-formed text (of course, we do not promise our extension is bug-free). Other differences include our VSCodeVim integration, our approach to unicode input, and the look-and-feel of our info panel.
 
 We made an effort to get the small details right, like not highlighting parentheses in comments and putting your cursor in the right place after a give or an automatic case split (even Emacs `agda2-mode` will sometimes put your cursor one past the final character of the line when the line shrinks during a give; we will not).
+
+## Development
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) (LTS recommended) and npm
+- [VS Code](https://code.visualstudio.com/) (to run the extension interactively)
+
+### Install dependencies
+
+```bash
+npm ci
+```
+
+### Type-check
+
+```bash
+npm run check-types
+```
+
+### Build
+
+```bash
+npm run compile
+```
+
+This runs the TypeScript type-checker followed by esbuild, producing `dist/extension.js`.
+
+For a production (minified) bundle:
+
+```bash
+npm run package
+```
+
+### Run unit tests
+
+```bash
+npm run test
+```
+
+Tests use [Vitest](https://vitest.dev/). The test suite runs fully in-process with a VS Code API mock (`test/__mocks__/vscode.ts`) — no VS Code window is required.
+
+### Run the extension interactively in VS Code
+
+1. Open this repository folder in VS Code.
+2. Press **F5** (or choose **Run → Start Debugging**) to launch an **Extension Development Host** window.
+   - The `.vscode/tasks.json` default build task runs `npm run watch` automatically before launch.
+3. In the new window, open any `.agda` file and use `Ctrl+C Ctrl+L` (or `Leader M L`) to load it.
+
+### Watch mode (incremental rebuild)
+
+```bash
+npm run watch
+```
+
+Both `tsc --watch` (type-checking) and `esbuild --watch` (bundling) run in parallel. Combine with **F5** for a fast inner loop.
+
+### Formatting
+
+```bash
+npm run format        # fix formatting
+npm run format:check  # check only (used in CI)
+```
 
 ## On the use of AI
 
