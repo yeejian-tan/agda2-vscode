@@ -266,7 +266,7 @@ export class AgdaOutlineProvider implements vscode.DocumentSymbolProvider {
       const docSymbol = toDocumentSymbol(document, symbol);
       let parentModule: vscode.DocumentSymbol | null = null;
       for (const moduleSymbol of moduleSymbols) {
-        if (moduleSymbol.line <= symbol.line) {
+        if (moduleSymbol.line < symbol.line) {
           parentModule = moduleSymbol.symbol;
         } else {
           break;
@@ -279,10 +279,7 @@ export class AgdaOutlineProvider implements vscode.DocumentSymbolProvider {
       }
     }
 
-    const allTopLevel = [
-      ...moduleSymbols.map((m) => ({ line: m.line, symbol: m.symbol })),
-      ...topLevelSymbols,
-    ];
+    const allTopLevel = [...moduleSymbols, ...topLevelSymbols];
     allTopLevel.sort((a, b) => a.line - b.line);
     return allTopLevel.map((entry) => entry.symbol);
   }
