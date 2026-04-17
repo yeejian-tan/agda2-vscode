@@ -7,6 +7,7 @@ import { WorkspaceState } from "./core/state.js";
 import { registerCommands, ShowInputBox } from "./editor/commands.js";
 import { InfoPanel } from "./editor/infoPanel.js";
 import { registerKeySequenceCommands } from "./editor/keySequence.js";
+import { AgdaOutlineProvider } from "./editor/outline.js";
 import { AbbreviationFeature } from "./unicode/AbbreviationFeature.js";
 import { AbbreviationProvider } from "./unicode/engine/AbbreviationProvider.js";
 import { showUnicodeInputBox } from "./editor/unicodeInputBox.js";
@@ -36,6 +37,10 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.languages.registerDocumentHighlightProvider({ language: "agda" }, highlighting),
     vscode.languages.registerRenameProvider({ language: "agda" }, highlighting),
+    vscode.languages.registerDocumentSymbolProvider(
+      { language: "agda" },
+      new AgdaOutlineProvider(),
+    ),
   );
 
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
