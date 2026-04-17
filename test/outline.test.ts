@@ -69,7 +69,7 @@ f = Set
     const symbols = parseAgdaSymbols(text);
     const f = symbols.find((s) => s.name === "f");
 
-    // Last definition of f is on line 4 (0-based).
+    // In the trimmed test string, the last `f = Set` line is at index 4 (0-based).
     expect(f?.line).toBe(4);
   });
 
